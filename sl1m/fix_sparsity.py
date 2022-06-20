@@ -6,8 +6,20 @@ from sl1m.solver import call_QP_solver, call_LP_solver
 
 from sl1m.problem_data import ProblemData
 
-ALPHA_THRESHOLD = 0.00001
-MAX_COMB_GENERATED = 100
+# ALPHA_THRESHOLD is compared to each surfaces alpha value.
+# A surface is "selected" (sparsity fixed and other surfaces of the surface are discarded) if its alpha value is inferior to the treshold. 
+# In practice, if this value is set too high, bad surfaces may be selected making the problem impossible in the exploration of the combinatorics.
+# Setting a very low value of ALPHA_THRESHOLD is always better.
+ALPHA_THRESHOLD = 0.000000001
+
+# MAX_COMB_GENERATED limits the number of combination generated to explore.
+# Strategy of exploration of the combinatorics
+# If the sparsity is not fixed after the first solve:
+# - all surfaces decided are fixed (other surfaces of the phase are discarded)
+# - all undecided surfaces are tested (brute force) starting with surfaces of the lowest alpha values (product of alpha values ordered).
+# In practice, the first combinations (with the lowest alpha values product) are the most likely to succeed.
+# Trying more than 10-20 combinations (for 10~20 phases) may mean that the problem is unfeasible and will result in more computation time for nothing.
+MAX_COMB_GENERATED = 20
 
 def optimize_sparse_L1(planner, pb, costs, QP_SOLVER, LP_SOLVER):
     """
@@ -287,9 +299,9 @@ def generate_combinatorials(pb, undecided_surfaces, decided_surfaces):
         phase = pb_fixed.phaseData[decided_surface[0]]
         phase.S = [phase.S[decided_surface[-1]]]
         phase.n_surfaces = 1
-    # Generate combinatorics
-    sorted_combinations = list(itertools.product(*[s[-1] for s in undecided_surfaces]))
-    for combination in sorted_combinations[0:min(MAX_COMB_GENERATED,len(sorted_combinations))]:
+    # Generate combinatorics - Generate a limited number of combinations (faster)
+    sorted_combinations = list(itertools.islice(itertools.product(*[s[-1] for s in undecided_surfaces]), MAX_COMB_GENERATED))
+    for combination in sorted_combinations:
         pb_comb = copy.deepcopy(pb_fixed)
         for i, undecided_surface in enumerate(undecided_surfaces):
             phase = pb_comb.phaseData[undecided_surface[0]]
@@ -314,9 +326,9 @@ def generate_combinatorials_gait(pb, undecided_surfaces, decided_surfaces):
         effector = decided_surface[1]
         phase.S[effector] = [phase.S[effector][decided_surface[-1]]]
         phase.n_surfaces[effector] = 1
-    # Generate combinatorics
-    sorted_combinations = list(itertools.product(*[s[-1] for s in undecided_surfaces]))
-    for combination in sorted_combinations[0:min(MAX_COMB_GENERATED,len(sorted_combinations))]:
+    # Generate combinatorics - Generate a limited number of combinations (faster)
+    sorted_combinations = list(itertools.islice(itertools.product(*[s[-1] for s in undecided_surfaces]), MAX_COMB_GENERATED))
+    for combination in sorted_combinations:
         pb_comb = copy.deepcopy(pb_fixed)
         for i, undecided_surface in enumerate(undecided_surfaces):
             phase = pb_comb.phaseData[undecided_surface[0]]
