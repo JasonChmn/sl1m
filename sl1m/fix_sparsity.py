@@ -19,7 +19,7 @@ ALPHA_THRESHOLD = 0.000000001
 # - all undecided surfaces are tested (brute force) starting with surfaces of the lowest alpha values (product of alpha values ordered).
 # In practice, the first combinations (with the lowest alpha values product) are the most likely to succeed.
 # Trying more than 10-20 combinations (for 10~20 phases) may mean that the problem is unfeasible and will result in more computation time for nothing.
-MAX_COMB_GENERATED = 20
+MAX_COMB_GENERATED = 2000
 
 def optimize_sparse_L1(planner, pb, costs, QP_SOLVER, LP_SOLVER):
     """
@@ -43,6 +43,11 @@ def optimize_sparse_L1(planner, pb, costs, QP_SOLVER, LP_SOLVER):
         print("optimize_sparse_L1 failed to solve the QP")
         return ProblemData(False, result.time)
 
+def print_alphas(alphas, start, end):
+    print("===== Print ",start," to ",end," alphas")
+    for i,alphas_phase in enumerate(alphas[start:end]):
+        print(" - ",i," => ",alphas_phase)
+    return None
 
 def fix_sparsity_combinatorial_gait(planner, pb, LP_SOLVER):
     """
@@ -54,6 +59,7 @@ def fix_sparsity_combinatorial_gait(planner, pb, LP_SOLVER):
     @param SOLVER Solver choice
     @return true if the problem was solved, fixed surfaces problem, surface_indices and time
     """
+    print("===== fix_sparsity_combinatorial_gait")
     G, h, C, d = planner.convert_pb_to_LP(pb)
     q = 100. * planner.alphas
 
@@ -61,10 +67,12 @@ def fix_sparsity_combinatorial_gait(planner, pb, LP_SOLVER):
     t = result.time
     if not result.success:
         print("Initial LP solver fails in fix_sparsity_combinatorial")
-        return False, pb, [], t
+        return False, pb, [], t, None
 
     alphas = planner.get_alphas(result.x)
+    print("  Nb steps : ",len(get_number_surfaces_per_phase_gait(alphas)))
     print("  Nb surfaces per phase : ",get_number_surfaces_per_phase_gait(alphas))
+    print_alphas(alphas, 10, 20)
 
     if is_sparsity_fixed_gait(pb, alphas):
         print("  -> Sparsity fixed directly")
@@ -73,34 +81,47 @@ def fix_sparsity_combinatorial_gait(planner, pb, LP_SOLVER):
             for j in range(len(phase.n_surfaces)):
                 phase.S[j] = [phase.S[j][selected_surfaces[i][j]]]
                 phase.n_surfaces[j] = 1
-        return True, pb, selected_surfaces, t
+        coms, moving_foot_pos, all_feet_pos = planner.get_result(result.x)
+        #print("all feet pos 0 : ",all_feet_pos)
+        pb_data = ProblemData(success=True, time=result.time, coms=coms, 
+                              moving_feet_pos=moving_foot_pos, all_feet_pos=all_feet_pos, 
+                              comb_needed=0, comb_total=0)
+        return True, pb, selected_surfaces, t, pb_data
 
     undecided_surfaces, decided_surfaces = get_undecided_surfaces_gait(pb, alphas)
     pbs = generate_fixed_sparsity_problems_gait(pb, alphas)
     if pbs is None:
         print("No combinatorial problems was found")
-        return False, pb, [], t
+        return False, pb, [], t, None
 
     # Handle the combinatorial
     sparsity_fixed = False
     i = 0
+    pb_data = None
     for (fixed_pb, combination) in pbs:
+        print("Combination ",i," / ",len(pbs)," : ",combination)
         G, h, C, d = planner.convert_pb_to_LP(fixed_pb, False)
         q = 100. * planner.alphas
         result = call_LP_solver(q, G, h, C, d, LP_SOLVER)
+        alphas = planner.get_alphas(result.x)
+        #print_alphas(alphas, 10, 20)
         t += result.time
         if result.success:
-            alphas = planner.get_alphas(result.x)
             if is_sparsity_fixed_gait(fixed_pb, alphas):
                 print("  -> Sparsity fixed in comb at try ",i+1," / ",len(pbs))
                 sparsity_fixed = True
                 pb = fixed_pb
+                coms, moving_foot_pos, all_feet_pos = planner.get_result(result.x)
+                #print("all feet pos 0 : ",all_feet_pos)
+                pb_data = ProblemData(success=True, time=t, coms=coms, 
+                                      moving_feet_pos=moving_foot_pos, all_feet_pos=all_feet_pos, 
+                                      comb_needed=0, comb_total=0)
                 break
         i += 1
 
     if not sparsity_fixed:
         print("  -> Sparsity could not be fixed")
-        return False, pb, [], t
+        return False, pb, [], t, None
 
     # Get ID of selected surfaces
     k = 0
@@ -120,7 +141,7 @@ def fix_sparsity_combinatorial_gait(planner, pb, LP_SOLVER):
         index_surface_selected = combination[i]
         # Update surface_indices
         surface_indices[i_phase][i_effector] = index_surface_selected
-    return sparsity_fixed, pb, surface_indices, t
+    return sparsity_fixed, pb, surface_indices, t, pb_data
 
 
 def fix_sparsity_combinatorial(planner, pb, LP_SOLVER):

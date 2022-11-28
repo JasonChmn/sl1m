@@ -14,6 +14,14 @@ try:
     import gurobipy as grb
     grb.setParam('LogFile', '')
     grb.setParam('OutputFlag', 0)
+    grb.setParam('Method', 2)   # -1=automatic, 0=primal simplex, 1=dual simplex, 2=barrier, 3=concurrent, 4=deterministic concurrent, and 5=deterministic concurrent simplex. 
+    NO_PRESOLVE = True
+    if NO_PRESOLVE:
+        grb.setParam('Presolve', 0);
+        grb.setParam('Cuts', 0);
+        grb.setParam('Heuristics', 0); 
+        grb.setParam('NoRelHeurTime', 0);
+        grb.setParam('MinRelNodes', 0);
 except ImportError:
     print("Import error: No module Gurobipy")
     pass
@@ -106,8 +114,11 @@ def call_MIP_solver(slack_selection_vector, P=None, q=None, G=None, h=None, C=No
     :param: slack_selection_vector Slack variables selection matrice of the problem
     :return: None if wrong SOLVER, else ResultData
     """
+    print(" XXX call_MIP_solver")
     hasCost = not(P is None or q is None)
     result = None
+
+    # TEST
     if hasCost:
         if solver == Solvers.GUROBI:
             result = solve_MIP_gurobi_cost(slack_selection_vector, P, q, G, h, C, d)
@@ -163,6 +174,113 @@ def solve_least_square(A, b, G=None, h=None, C=None, d=None, solver=Solvers.GURO
     return call_QP_solver(P, q, G, h, C, d, solver)
 
 # -------------------------- LINEAR PROGRAM --------------------------------------------------------
+
+
+
+
+def solve_test(slack_selection_vector,G,h,C,d, SET_CONSTR_NB_SURF, MODE_L1, CONTINUOUS, USE_RELAX=False):
+    #print("solve_test - FEASIBILITY => SET_CONSTR_NB_SURF: ",SET_CONSTR_NB_SURF)
+    #print("                            MODE_L1: ",MODE_L1)
+    #print("                            CONTINUOUS: ",CONTINUOUS)
+
+    model = grb.Model("mip")
+
+    vars = []
+    for i,variable in enumerate(slack_selection_vector):
+        #print("variable : ",variable)
+        if variable > 0:
+            if CONTINUOUS:
+                # Relaxation
+                #cVars.append(model.addVar(lb=0, ub=1, vtype=grb.GRB.CONTINUOUS, name='slack'+str(i)))
+                #vars.append(model.addVar(vtype=grb.GRB.CONTINUOUS, ub=1.0, name='slack'+str(i))) # Default [0,inf] => now [0,1]
+                vars.append(model.addVar(lb=-grb.GRB.INFINITY, ub=grb.GRB.INFINITY, vtype=grb.GRB.CONTINUOUS, name='slack'+str(i))) # Default [0,inf] => Works better it seems ?
+                #vars.append(model.addVar(vtype=grb.GRB.CONTINUOUS, lb=-grb.GRB.INFINITY, name='slack'+str(i))) # Default [0,inf] => does not go in negative ?
+            else:
+                # MIP
+                vars.append(model.addVar(lb=0, ub=1, vtype=grb.GRB.BINARY, name='slack'+str(i)))
+        else:
+            vars.append(model.addVar(lb=-grb.GRB.INFINITY, ub=grb.GRB.INFINITY,
+                                      vtype=grb.GRB.CONTINUOUS, name='x'+str(i)))
+    if USE_RELAX:
+        model.update()
+        #input("test relax...")
+        model = model.relax()
+        #input("Ok...")
+
+    # Update model to integrate new variables
+    model.update()
+    x = np.array(model.getVars(), copy=False)
+
+    # Inequality constraints
+    if G.shape[0] > 0:
+        for i in range(G.shape[0]):
+            idx = [j for j, el in enumerate(G[i].tolist()) if el != 0.]
+            variables = x[idx]
+            coeff = G[i, idx]
+            expr = grb.LinExpr(coeff, variables)
+            model.addConstr(expr, grb.GRB.LESS_EQUAL, h[i])
+    model.update()
+
+    # Equality constraints
+    if C.shape[0] > 0:
+        for i in range(C.shape[0]):
+            idx = [j for j, el in enumerate(C[i].tolist()) if el != 0.]
+            variables = x[idx]
+            coeff = C[i, idx]
+            expr = grb.LinExpr(coeff, variables)
+            model.addConstr(expr, grb.GRB.EQUAL, d[i])
+    model.update()
+
+    slack_indices = [i for i, el in enumerate(slack_selection_vector) if el > 0]
+    obj_value_wanted = 0
+    #print("     => Set constraint slack (select one surface per phase)")
+    # equality slack sum
+    variables = []
+    previousL = 0
+    for i, el in enumerate(slack_indices):
+        if i != 0 and el - previousL > 2.:
+            assert len(variables) > 0
+            expr = grb.LinExpr(np.ones(len(variables)), variables)
+            if SET_CONSTR_NB_SURF:
+                model.addConstr(expr, grb.GRB.EQUAL, len(variables) - 1)
+            obj_value_wanted += len(variables)-1
+            variables = [x[el]]
+        elif el != 0:
+            variables += [x[el]]
+        previousL = el
+    if len(variables) > 1:
+        expr = grb.LinExpr(np.ones(len(variables)), variables)
+        if SET_CONSTR_NB_SURF:
+            model.addConstr(expr, grb.GRB.EQUAL, len(variables) - 1)
+        obj_value_wanted += len(variables)-1
+
+    if MODE_L1:
+        #print("     => Set cost l1")
+        obj = 0
+        for i, el in enumerate(slack_indices):
+            obj += x[el]
+        #print("       Objective: ",obj)
+        model.setObjective(obj, grb.GRB.MINIMIZE)
+    #model.setParam('BestObjStop', obj_value_wanted);
+    #model.setParam('Heuristics', 0)
+    # Optimized
+    model.update()
+    t_init = clock()
+    model.optimize()
+    t_end = clock()
+
+    try:
+        print("solve_MIP_gurobi - FEASIBILITY => SUCCESS : ",model.objVal," == ",obj_value_wanted)
+        print("                               => Solved in ",ms(t_end-t_init)/1000.)
+        vars = model.getVars()
+        res = [el.x for el in vars]
+        valid = (model.Status == grb.GRB.OPTIMAL) or (model.objVal == obj_value_wanted)
+        return ResultData(valid, ms(t_end-t_init), res)
+    except:
+        return ResultData(False, ms(t_end-t_init))
+
+
+# ========================================================================================
 
 
 def solve_lp_linprog(q, G=None, h=None, C=None, d=None):
@@ -235,7 +353,11 @@ def solve_lp_gurobi(q, G=None, h=None, C=None, d=None):
     subject to  G x <= h
     subject to  C x  = d
     """
-    t_init = clock()
+    ADD_CONSTR_ALPHA = True
+    ADD_CONSTR_NB_SURF = True
+    SET_L1 = True
+    print("solve_lp_gurobi, no quadratic cost => ADD_CONSTR_NB_SURF: ",ADD_CONSTR_NB_SURF," and SET_L1: ",SET_L1)
+
     model = grb.Model("lp")
 
     # add continuous variables
@@ -267,6 +389,9 @@ def solve_lp_gurobi(q, G=None, h=None, C=None, d=None):
             model.addConstr(expr, grb.GRB.LESS_EQUAL, h[i])
 
     slack_indices = [i for i, el in enumerate(q) if el > 0]
+    if ADD_CONSTR_ALPHA:
+        for el in slack_indices:
+            model.addConstr(x[el], grb.GRB.LESS_EQUAL, 1)
 
     # set objective
     variables = []
@@ -276,6 +401,8 @@ def solve_lp_gurobi(q, G=None, h=None, C=None, d=None):
         if i != 0 and el - previousL > 2.:
             assert len(variables) > 0
             expr = grb.LinExpr(np.ones(len(variables)), variables)
+            if ADD_CONSTR_NB_SURF:
+                model.addConstr(expr, grb.GRB.EQUAL, len(variables) - 1)
             obj += expr
             variables = [x[el]]
         elif el != 0:
@@ -283,9 +410,14 @@ def solve_lp_gurobi(q, G=None, h=None, C=None, d=None):
         previousL = el
     if len(variables) > 1:
         expr = grb.LinExpr(np.ones(len(variables)), variables)
+        if ADD_CONSTR_NB_SURF:
+            model.addConstr(expr, grb.GRB.EQUAL, len(variables) - 1)
         obj += expr
 
-    model.setObjective(obj, grb.GRB.MINIMIZE)
+    if SET_L1:
+        model.setObjective(obj, grb.GRB.MINIMIZE)
+
+    t_init = clock()
     model.optimize()
     t_end = clock()
     try:
@@ -420,13 +552,14 @@ def solve_qp_gurobi(P, q, G=None, h=None, C=None, d=None, verbose=False):
 
 
 def solve_MIP_gurobi(slack_selection_vector, G=None, h=None, C=None, d=None):
+    MODE_L1 = False
+    print("solve_MIP_gurobi, no cost => ",MODE_L1)
     """
     Solve the Mixed-Integer problem using Gurobipy
     Choose one alpha per phase
     subject to  G x <= h
     subject to  C x  = d
     """
-    t_init = clock()
     model = grb.Model("mip")
 
     cVars = []
@@ -462,25 +595,62 @@ def solve_MIP_gurobi(slack_selection_vector, G=None, h=None, C=None, d=None):
     model.update()
 
     slack_indices = [i for i, el in enumerate(slack_selection_vector) if el > 0]
-
-    # equality slack sum
-    variables = []
-    previousL = 0
-    for i, el in enumerate(slack_indices):
-        if i != 0 and el - previousL > 2.:
-            assert len(variables) > 0
+    obj_value_wanted = 0
+    if True:
+        print("     => Set constraint slack (select one surface per phase)")
+        # equality slack sum
+        variables = []
+        previousL = 0
+        for i, el in enumerate(slack_indices):
+            if i != 0 and el - previousL > 2.:
+                assert len(variables) > 0
+                expr = grb.LinExpr(np.ones(len(variables)), variables)
+                model.addConstr(expr, grb.GRB.EQUAL, len(variables) - 1)
+                obj_value_wanted += len(variables)-1
+                variables = [x[el]]
+            elif el != 0:
+                variables += [x[el]]
+            previousL = el
+        if len(variables) > 1:
             expr = grb.LinExpr(np.ones(len(variables)), variables)
             model.addConstr(expr, grb.GRB.EQUAL, len(variables) - 1)
-            variables = [x[el]]
-        elif el != 0:
-            variables += [x[el]]
-        previousL = el
-    if len(variables) > 1:
-        expr = grb.LinExpr(np.ones(len(variables)), variables)
-        model.addConstr(expr, grb.GRB.EQUAL, len(variables) - 1)
+            obj_value_wanted += len(variables)-1
+
+    obj_value_wanted = 0
+    if MODE_L1:
+        print("     => Set cost l1")
+        # cost l1
+        variables = []
+        previousL = 0
+        obj = 0
+        for i, el in enumerate(slack_indices):
+            if i != 0 and el - previousL > 2.:
+                assert len(variables) > 0
+                obj_value_wanted += len(variables)-1
+                expr = grb.LinExpr(np.ones(len(variables)), variables)
+                obj += expr
+                variables = [x[el]]
+            elif el != 0:
+                variables += [x[el]]
+            previousL = el
+        if len(variables) > 1:
+            obj_value_wanted += len(variables)-1
+            expr = grb.LinExpr(np.ones(len(variables)), variables)
+            obj += expr
+        model.setObjective(obj, grb.GRB.MINIMIZE)
     model.update()
+    t_init = clock()
     model.optimize()
     t_end = clock()
+    try:
+        if MODE_L1 and model.objVal!=obj_value_wanted:
+            print("solve_MIP_gurobi - FEASIBILITY => FAILED : ",model.objVal," != ",obj_value_wanted)
+            return ResultData(False, ms(t_end-t_init))
+    except:
+        return ResultData(False, ms(t_end-t_init))
+
+    print("solve_MIP_gurobi - FEASIBILITY => SUCCESS : ",model.objVal," == ",obj_value_wanted)
+    print("                               => Solved in ",ms(t_end-t_init)/1000.)
     try:
         res = [el.x for el in cVars]
         return ResultData(model.Status == grb.GRB.OPTIMAL, ms(t_end-t_init), res)
@@ -495,8 +665,9 @@ def solve_MIP_gurobi_cost(slack_selection_vector, P, q, G=None, h=None, C=None, 
     subject to  G x <= h
     subject to  C x  = d
     """
-    grb.setParam('LogFile', '')
-    grb.setParam('OutputFlag', 0)
+    print("solve_MIP_gurobi - COST")
+    #grb.setParam('LogFile', '')
+    #grb.setParam('OutputFlag', 0)
 
     slack_indices = [i for i, el in enumerate(slack_selection_vector) if el > 0]
     n_variables = len(slack_selection_vector)

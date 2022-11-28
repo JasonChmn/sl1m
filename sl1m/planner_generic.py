@@ -269,29 +269,74 @@ class Planner:
         C = np.zeros((n_eq, n_variables))
         d = np.zeros(n_eq)
 
+
         i_start = 0
         i_start_eq = 0
         js = [0]
         cons = Constraints(self.n_effectors, self.com)
+        prev_i = i_start
         for phase in self.pb.phaseData:
+            #print("===================NEW PHASE===================")
             feet_phase = self._feet_last_moving_phase(phase.id)
-
             i_start = cons.foot_relative_distance(self.pb, phase, G, h, i_start, js, feet_phase)
+            #print("foot_relative_distance")
+            #self.print_slack_weights(G, phase, prev_i, js[-1])
+            #input("...")
+            #prev_i = i_start
+
             i_start = cons.surface_inequality(phase, G, h, i_start, js[-1])
+            #print("surface_inequality")
+            #self.print_slack_weights(G, phase, prev_i, js[-1])
+            #prev_i = i_start
+            #input("...")
+
             i_start = cons.slack_positivity(phase, G, h, i_start, js[-1])
+            #print("slack_positivity")
+            #self.print_slack_weights(G, phase, prev_i, js[-1])
+            #prev_i = i_start
 
-            if self.com:
+            if self.com and True:
                 i_start = cons.fixed_foot_com(self.pb, phase, G, h, i_start, js, feet_phase)
-                # i_start_eq = cons.com(self.pb, phase, C, d, i_start_eq, js, feet_phase)
+                #print("fixed_foot_com")
+                #self.print_slack_weights(G, phase, prev_i, js[-1])
+                #prev_i = i_start
 
-            if self.mip:
-                i_start_eq = cons.slack_equality(phase, C, d, i_start_eq, js[-1])
+                i_start_eq = cons.com(self.pb, phase, C, d, i_start_eq, js, feet_phase)
+                #print("com")
+                #self.print_slack_weights(G, phase, prev_i, js[-1])
+                #prev_i = i_start
+
+            #if self.mip:
+            #    i_start_eq = cons.slack_equality(phase, C, d, i_start_eq, js[-1])
 
             js.append(js[-1] + self._phase_n_variables(phase))
 
         G, h = normalize([G, h])
         C, d = normalize([C, d])
         return G, h, C, d
+
+
+    def print_slack_weights(self, G, phase, i_start, j):
+        #print("print_slack_weights ==== ",len(G[i_start:]))
+        print("i_start: ",i_start)
+        list_len = []
+        for i in range(i_start,len(G)):
+            for id, surfaces in enumerate(phase.S):
+                for S, s in surfaces:
+                    l = S.shape[0]
+                    #print(i+l)
+                    #print(j+self._default_n_variables(phase))
+                    print(G[i:i+l])
+                    list = G[i:i+l, j+self._default_n_variables(phase)]
+                    list_len.append(len(G[i:i + l, j + self._default_n_variables(phase)]))
+                    #print(list)
+                    if np.linalg.norm(list)>0:
+                        #print("print_slack_weights ==== ",len(G[i_start:]))
+                        print(list)
+                        #input("...")
+        #input("...")
+        #print(" list_len: ",list_len)
+        return None
 
     def selected_surfaces(self, alphas):
         """

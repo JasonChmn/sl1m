@@ -22,7 +22,8 @@ class Constraints:
 
         self.default_n_variables = 4 * int(com)
 
-        self.M = 50.
+        self.M = 50. # 1000.
+        self.M_MINI = 0.5
 
     def _default_n_variables(self, phase):
         """
@@ -238,25 +239,30 @@ class Constraints:
                     else:
                         foot_pose = pb.p0[other]
                         h[i:i + l] -= K.dot(foot_pose)
-                    i += l
+                    input("Not used...")
                 elif phase.id == 0:
                     l = k.shape[0]
                     G[i:i + l, j:j + self._default_n_variables(phase)] = -K.dot(self.foot(phase, foot))
                     h[i:i + l] = k
                     h[i:i + l] -= K.dot(pb.p0[other])
-                    i += l
+                    #print(G[i:i + l, j + self._default_n_variables(phase)])
+                    #G[i:i + l, j + self._default_n_variables(phase)] = 0.05*np.ones(l) #-self.M_MINI * np.ones(l)
+                    #print(G[i:i + l, j + self._default_n_variables(phase)])
                 elif other in pb.phaseData[phase.id - 1].stance:
                     l = k.shape[0]
                     G[i:i + l, j:j + self._default_n_variables(phase)] = -K.dot(self.foot(phase, foot))
                     h[i:i + l] = k
+                    #print("k: ",k)
                     if feet_phase[other] != -1:
                         j_f = js[feet_phase[other]]
                         phase_f = pb.phaseData[feet_phase[other]]
                         G[i:i + l, j_f:j_f + self._default_n_variables(phase_f)] = K.dot(self.foot(phase_f, other))
+                        #input("...")
                     else:
                         foot_pose = pb.p0[other]
                         h[i:i + l] -= K.dot(foot_pose)
-                    i += l
+                #input("...")
+                i += l
         return i
 
     def slack_positivity(self, phase, G, h, i_start, j):
@@ -275,6 +281,8 @@ class Constraints:
         for n_surface in phase.n_surfaces:
             if n_surface > 1:
                 G[i:i + n_surface, j_alpha:j_alpha + n_surface] = -np.identity(n_surface)
+                #print(G[i:i + n_surface, j_alpha:j_alpha + n_surface])
+                #input("...")
                 j_alpha += n_surface
                 i += n_surface
         return i
@@ -292,13 +300,16 @@ class Constraints:
         """
         i = i_start
         j_alpha = self._default_n_variables(phase)
+        #print(self._default_n_variables(phase))
         for id, surfaces in enumerate(phase.S):
             for S, s in surfaces:
                 l = S.shape[0]
                 G[i:i + l, j:j + self._default_n_variables(phase)] = S.dot(self.foot(phase, id=id))
                 h[i:i + l] = s
                 if phase.n_surfaces[id] > 1:
-                    G[i:i + l, j + j_alpha] = -self.M * np.ones(l)
+                    G[i:i + l, j + j_alpha] = -self.M * np.ones(l) # BIG M formulation
+                    #print(G[i:i + l, j + j_alpha])
+                    #input("in surf ineq...")
                     j_alpha += 1
                 i += l
         return i
@@ -348,10 +359,14 @@ class Constraints:
                     j_f = js[feet_phase[foot]]
                     phase_f = pb.phaseData[feet_phase[foot]]
                     C[i:i + 2, j_f:j_f + self._default_n_variables(phase_f)] = weight * self.foot_xy(phase_f, foot)
+                    #print(C[i:i + 2, j_f + self._default_n_variables(phase)])
+                    #input("...")
                 elif pb.p0[foot] is not None:
                     foot_pose = pb.p0[foot]
                     d[i:i + 2] -= weight * foot_pose[:2]
         C[i:i + 2, j:j + self._default_n_variables(phase)] = -self.com_xy(phase)
+        #print(C[i:i + 2, j + self._default_n_variables(phase)])
+        #input("...")
         i += 2
         return i
 
@@ -368,6 +383,8 @@ class Constraints:
         i = i_start
         C[i:i + 2, :self._default_n_variables(phase)] = self.com_xy(phase)
         d[i:i + 2] = pb.c0[:2]
+        #print(C[i:i + 2, self._default_n_variables(phase)])
+        #input("...")
         i += 2
         return i
 

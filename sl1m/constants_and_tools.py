@@ -111,6 +111,7 @@ def surface_points_to_inequalities(S, normal, eq_as_ineq):
     ine = inequalities_to_Inequalities_object(A, b)
     ine = rotate_inequalities(ine, trinv)
     d = array([n.dot(S[:, 0])])
+    #print("constants_and_tools, surface_points_to_inequalities, eq_as_ineq: ",eq_as_ineq)
     if eq_as_ineq:
         A = vstack([ine.A, n, -n])
         b = concatenate([ine.b, d + EPSILON_EQ, -d + EPSILON_EQ]).reshape((-1,))
